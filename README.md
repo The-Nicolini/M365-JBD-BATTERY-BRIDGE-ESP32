@@ -1,7 +1,7 @@
 # M365 JBD Battery Bridge — ESP32-S3
 
-Replaces the stock Xiaomi M365 BMS with a custom lithium pack managed by a **JBD (Jiabaida) BMS**.  
-An **ESP32-S3** sits in the middle, translating between the two protocols and hosting a **live WiFi battery dashboard**.
+Bridges a custom lithium pack (managed by a **JBD (Jiabaida) BMS**) to the Xiaomi M365 ESC.  
+An **ESP32-S3** taps into the M365 serial bus alongside the stock BLE module, translating between the two protocols and hosting a **live WiFi battery dashboard**.
 
 ---
 
@@ -24,7 +24,8 @@ An **ESP32-S3** sits in the middle, translating between the two protocols and ho
 2. It answers M365 ESC requests in the native M365 protocol, forwarding battery state.  
    Voltage is linearly mapped from the real pack's S-count range to the stock M365 10S range (30–42 V) so the ESC always sees a valid pack.
 3. A WiFi Access Point (`M365-BMS` / `m365batt` by default) hosts a web dashboard at `192.168.4.1`.  
-   If no client connects within **2 minutes** of boot, the AP shuts down and the bridge keeps running silently.
+   The ESP32 is powered from the scooter's **5 V rail** (only live when the scooter is switched on), so the AP starts automatically on every ride.  
+   If no client connects within **2 minutes** of power-on, the AP shuts down — this is intentional: the bridge keeps running but radio is off, and you cannot accidentally leave a WiFi network broadcasting indefinitely.
 
 ---
 
@@ -46,7 +47,7 @@ An **ESP32-S3** sits in the middle, translating between the two protocols and ho
 ### M365 BLE module connector (4-wire, as labelled on the module)
 
 The M365 runs a **single-wire (half-duplex) serial bus** between the BLE module and ESC at 115200 bps 8N1.  
-The ESP32 replaces the BLE module entirely.
+The ESP32 **taps into this bus alongside the stock BLE module** — the BLE module remains in place and still functions. The ESP32 listens and responds to ESC requests independently.
 
 | Wire colour | Label | Signal |
 |---|---|---|
@@ -56,6 +57,7 @@ The ESP32 replaces the BLE module entirely.
 | Red | 5 | 5 V — only present when scooter is switched on |
 
 > **Power the ESP32** from the **5 V (red)** rail through a 3.3 V LDO or small buck converter.  
+> This rail is only active when the scooter is switched on — so the ESP32 powers up and starts its 2-minute WiFi window automatically on every ride.  
 > The ESP32-S3 GPIO pins are 5 V tolerant, so no level shifter is needed for the serial line.
 
 ### M365 serial bus connection
