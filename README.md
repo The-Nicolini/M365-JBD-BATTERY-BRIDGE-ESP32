@@ -35,35 +35,58 @@ An **ESP32-S3** sits in the middle, translating between the two protocols and ho
 | ESP32-S3-DevKitC-1 | Any ESP32-S3 board works; adjust pins if needed |
 | JBD BMS | Tested target: JBD-SP14S004 (7–14S configurable) |
 | DC–DC level shifter | If BMS UART is 5 V logic; ESP32-S3 is 3.3 V |
-| Power supply | Power ESP32 from the pack's 3.3 V / 5 V rail or a small buck converter |
+| 3.3 V LDO / buck converter | Power ESP32 from the scooter's 5 V rail (see wiring) |
+| 2× resistors ~680 Ω–1 kΩ | Series protection on GPIO RX/TX pins |
+| 1× small signal diode | Half-duplex collision protection on M365 bus (see below) |
 
 ---
 
 ## Wiring
 
+### M365 BLE module connector (4-wire, as labelled on the module)
+
+The M365 runs a **single-wire (half-duplex) serial bus** between the BLE module and ESC at 115200 bps 8N1.  
+The ESP32 replaces the BLE module entirely.
+
+| Wire colour | Label | Signal |
+|---|---|---|
+| Black | G | Ground |
+| Yellow | T | One-wire serial bus (115200 bps, 8N1) |
+| Green | P | VBatt — always available (pack voltage, ~36 V) |
+| Red | 5 | 5 V — only present when scooter is switched on |
+
+> **Power the ESP32** from the **5 V (red)** rail through a 3.3 V LDO or small buck converter.  
+> The ESP32-S3 GPIO pins are 5 V tolerant, so no level shifter is needed for the serial line.
+
+### M365 serial bus connection
+
+The yellow `T` wire is a **shared one-wire bus** — RX and TX are the same physical line.  
+Use the following protection circuit to avoid bus contention:
+
 ```
-JBD BMS                    ESP32-S3                   M365 ESC
-─────────────────────────────────────────────────────────────────
+                      680R–1kΩ
+M365 "T" wire ────────┬──/\/\/──── ESP32 GPIO 18 (M365_RX)
+                      │
+                    [diode, anode→bus]
+                      │  100–200R
+                      └──/\/\/──── ESP32 GPIO 19 (M365_TX)
+```
+
+- Series resistor (680 Ω–1 kΩ) on the RX path protects the GPIO
+- Diode + 100–200 Ω resistor from RX toward TX prevents TX from back-driving RX while listening
+
+### JBD BMS connection (standard full-duplex UART)
+
+```
+JBD BMS                    ESP32-S3
+──────────────────────────────────────
 BMS TX ──────────────────► GPIO 16 (JBD_RX)
 BMS RX ◄────────────────── GPIO 17 (JBD_TX)
-                           GPIO 18 (M365_RX) ◄──────── ESC TX
-                           GPIO 19 (M365_TX) ──────────► ESC RX
-GND ──────────────────────── GND ──────────────────── GND
+GND ──────────────────────── GND
 ```
 
-> **⚠ Voltage warning:** The JBD UART signals may be 5 V. Use a level shifter or voltage divider on BMS TX → GPIO 16.  
-> **⚠ Power warning:** If your custom pack voltage differs from the stock 36 V, ensure the M365 ESC power input is within its rated range. The firmware only handles *communication* voltage mapping — it cannot protect hardware from overvoltage.
-
-### M365 battery connector pinout (JST-style, 4-wire)
-
-| Pin | Signal |
-|---|---|
-| 1 | Pack + (36 V nominal) |
-| 2 | UART TX (ESC → BMS) |
-| 3 | UART RX (BMS → ESC) |
-| 4 | GND |
-
-Connect pins 2 & 3 to ESP32 GPIO 18 & 19 respectively (cross TX↔RX).
+> **⚠ Voltage warning:** JBD UART signals may be 5 V. Use a level shifter or voltage divider on BMS TX → GPIO 16.  
+> **⚠ Power warning:** The firmware handles *communication* voltage mapping only — ensure the ESC power input stays within its rated range for your pack voltage.
 
 ---
 
