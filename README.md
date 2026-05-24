@@ -182,3 +182,11 @@ To re-enable WiFi: power-cycle or reset the ESP32.
 ## License
 
 MIT — do what you want, no warranty.
+
+---
+
+## Status
+
+> **⚠ Not yet physically tested.**  
+> The firmware compiles and the web dashboard works over WiFi, but the full JBD ↔ ESP32 ↔ M365 ESC chain has not been validated on real hardware at time of writing.  
+> Hardware testing is in progress — this notice will be removed once confirmed working.
