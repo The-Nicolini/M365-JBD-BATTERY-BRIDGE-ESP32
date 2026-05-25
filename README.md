@@ -141,6 +141,12 @@ pio run --target upload --upload-port /dev/ttyUSB0  # Linux
 - Protection fault flags (over-voltage, under-voltage, over-current, short, etc.)
 - Connection status dot (green = live data, red = JBD not responding)
 
+#### Mobile dashboard preview
+
+![Mobile dashboard screenshot 1](images/webpage.jpeg)
+
+![Mobile dashboard screenshot 2](images/webpage2.jpeg)
+
 ### Quick controls
 
 | Control | Function |
