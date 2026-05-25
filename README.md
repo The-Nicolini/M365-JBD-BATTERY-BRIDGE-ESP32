@@ -1,7 +1,7 @@
-# M365 JBD Battery Bridge — ESP32-S3
+# M365 JBD Battery Bridge — ESP32-S3 / ESP8266 D1 Mini
 
 Bridges a custom lithium pack (managed by a **JBD (Jiabaida) BMS**) to the Xiaomi M365 ESC.  
-An **ESP32-S3** taps into the M365 serial bus alongside the stock BLE module, translating between the two protocols and hosting a **live WiFi battery dashboard**.
+Supports both **ESP32-S3** and **ESP8266 D1 Mini** variants. The board taps into the M365 serial bus alongside the stock BLE module, translating between the two protocols and hosting a **live WiFi battery dashboard**.
 
 ---
 
@@ -34,9 +34,10 @@ An **ESP32-S3** taps into the M365 serial bus alongside the stock BLE module, tr
 | Part | Notes |
 |---|---|
 | ESP32-S3-DevKitC-1 | Any ESP32-S3 board works; adjust pins if needed |
+| ESP8266 D1 Mini | Supported for lightweight installations; see pin mapping below |
 | JBD BMS | Tested target: JBD-SP14S004 (7–14S configurable) |
-| DC–DC level shifter | If BMS UART is 5 V logic; ESP32-S3 is 3.3 V |
-| 3.3 V LDO / buck converter | Power ESP32 from the scooter's 5 V rail (see wiring) |
+| DC–DC level shifter | If BMS UART is 5 V logic; ESP32/ESP8266 are 3.3 V |
+| 3.3 V LDO / buck converter | Power board from the scooter's 5 V rail (see wiring) |
 | 2× resistors ~680 Ω–1 kΩ | Series protection on GPIO RX/TX pins |
 | 1× small signal diode | Half-duplex collision protection on M365 bus (see below) |
 
@@ -56,9 +57,9 @@ The ESP32 **taps into this bus alongside the stock BLE module** — the BLE modu
 | Green | P | VBatt — always available (pack voltage, ~36 V) |
 | Red | 5 | 5 V — only present when scooter is switched on |
 
-> **Power the ESP32** from the **5 V (red)** rail through a 3.3 V LDO or small buck converter.  
-> This rail is only active when the scooter is switched on — so the ESP32 powers up and starts its 2-minute WiFi window automatically on every ride.  
-> The ESP32-S3 GPIO pins are 5 V tolerant, so no level shifter is needed for the serial line.
+> **Power the board** from the **5 V (red)** rail through a 3.3 V LDO or small buck converter.  
+> This rail is only active when the scooter is switched on — so the board powers up and starts its 2-minute WiFi window automatically on every ride.  
+> The ESP32-S3 GPIO pins are 5 V tolerant, so no level shifter is needed for the serial line on ESP32-S3. For ESP8266 D1 Mini, use a level shifter or voltage divider on BMS TX → D5.
 
 ### M365 serial bus connection
 
@@ -80,14 +81,22 @@ M365 "T" wire ────────┬──/\/\/──── ESP32 GPIO 18 (
 ### JBD BMS connection (standard full-duplex UART)
 
 ```
-JBD BMS                    ESP32-S3
-──────────────────────────────────────
-BMS TX ──────────────────► GPIO 16 (JBD_RX)
-BMS RX ◄────────────────── GPIO 17 (JBD_TX)
+JBD BMS                    ESP32-S3 / ESP8266 D1 Mini
+──────────────────────────────────────────────────────
+BMS TX ──────────────────► GPIO 16 (JBD_RX)  or D5 on D1 Mini
+BMS RX ◄────────────────── GPIO 17 (JBD_TX)  or D6 on D1 Mini
 GND ──────────────────────── GND
+
+For the ESP8266 D1 Mini, use the following board pins:
+- JBD_RX = D5
+- JBD_TX = D6
+- M365_RX = D7
+- M365_TX = D1
+
+> **⚠ Boot note:** D1 Mini `D8` / GPIO15 is not used by this firmware because it is a boot-strapping pin.
 ```
 
-> **⚠ Voltage warning:** JBD UART signals may be 5 V. Use a level shifter or voltage divider on BMS TX → GPIO 16.  
+> **⚠ Voltage warning:** JBD UART signals may be 5 V. Use a level shifter or voltage divider on BMS TX → GPIO 16 or D5.  
 > **⚠ Power warning:** The firmware handles *communication* voltage mapping only — ensure the ESC power input stays within its rated range for your pack voltage.
 
 ---
@@ -96,7 +105,7 @@ GND ──────────────────────── GND
 
 ### Requirements
 - [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
-- ESP32-S3-DevKitC-1 connected via USB (CH343 / CP210x driver)
+- ESP32-S3-DevKitC-1 or ESP8266 D1 Mini connected via USB (CH343 / CP210x driver)
 
 ### Steps
 
