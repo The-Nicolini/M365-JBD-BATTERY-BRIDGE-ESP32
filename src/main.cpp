@@ -1,3 +1,4 @@
+
 /**
  * JBD BMS <-> Xiaomi M365 ESC Bridge  +  WiFi AP battery web dashboard
  * Target: ESP32 (any variant)
@@ -38,16 +39,24 @@
  *     the ESC shows a BMS-fault LED or won't engage throttle.
  */
 
+
 #include <Arduino.h>
+#if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <EEPROM.h>
+#include <SoftwareSerial.h>
+#endif
 
 // ─── Pin config ───────────────────────────────────────────────────────────────
-#define JBD_RX  16
-#define JBD_TX  17
-#define M365_RX 18
-#define M365_TX 19
+#include "pins.h"
+#include "hardware.h"
+#include "webserver_internal.h"
+#include "protocol.h"
 
 // ─── Timing ──────────────────────────────────────────────────────────────────
 #define JBD_POLL_MS      500   // how often to poll the JBD BMS
@@ -58,10 +67,6 @@
 #define ADDR_ESC  0x21
 #define ADDR_BMS  0x22
 
-// ─── UART instances ──────────────────────────────────────────────────────────
-HardwareSerial jbdSerial(1);   // UART1 -> JBD BMS
-HardwareSerial m365Serial(2);  // UART2 -> M365 ESC
-
 // ─── JBD poll commands ───────────────────────────────────────────────────────
 // CRC pre-calculated: 0x10000 - (0x03) = 0xFFFC? No:
 //   Basic info cmd 0x03: data = none, so CRC covers [03 00] = sum 3, CRC = 0xFFFD
@@ -69,22 +74,7 @@ HardwareSerial m365Serial(2);  // UART2 -> M365 ESC
 static const uint8_t JBD_CMD_BASIC[] = {0xDD, 0xA5, 0x03, 0x00, 0xFF, 0xFD, 0x77};
 static const uint8_t JBD_CMD_CELLS[] = {0xDD, 0xA5, 0x04, 0x00, 0xFF, 0xFC, 0x77};
 
-// ─── Battery state ───────────────────────────────────────────────────────────
-struct BatteryState {
-    uint16_t voltage_mv;       // pack voltage mV
-    int16_t  current_ma;       // current mA (+discharge, -charge — verify with your JBD)
-    uint16_t remaining_mah;    // remaining capacity mAh
-    uint16_t nominal_mah;      // nominal capacity mAh
-    uint8_t  soc_pct;          // state of charge 0–100
-    uint8_t  cell_count;
-    uint16_t cell_mv[20];      // per-cell voltage mV
-    int16_t  temp_c10[3];      // temperatures in 0.1 °C, up to 3 NTCs
-    uint8_t  ntc_count;
-    uint16_t prot_status;      // JBD protection status bitmask
-    bool     valid;
-};
-
-static BatteryState batt = {};
+BatteryState batt = {};
 
 // ─── RX buffers ──────────────────────────────────────────────────────────────
 static uint8_t jbdRxBuf[140];
@@ -93,14 +83,6 @@ static uint8_t jbdRxLen = 0;
 static uint8_t m365RxBuf[64];
 static uint8_t m365RxLen = 0;
 
-// ─── WiFi AP config ──────────────────────────────────────────────────────────
-static Preferences prefs;
-static char apSsid[33] = "M365-BMS";
-static char apPass[64] = "m365batt";  // min 8 chars
-static bool apRestartPending = false;
-
-// ─── Web server ──────────────────────────────────────────────────────────────
-static WebServer webServer(80);
 
 // Control state
 static volatile bool     btEnabled    = true;
@@ -115,7 +97,6 @@ static uint8_t           packCells    = 10;          // series cell count — ma
 // If no client connects within AP_IDLE_MS of boot, disable WiFi AP.
 // Bridge continues running on stored settings.
 #define AP_IDLE_MS        (2UL * 60UL * 1000UL)  // 2 minutes
-static bool     apActive    = true;
 static uint32_t apStartMs   = 0;
 
 // ─── Web page ────────────────────────────────────────────────────────────────
@@ -186,6 +167,12 @@ h1{font-size:1.1rem;color:var(--accent);letter-spacing:.05em;text-transform:uppe
   <div class="card"><div class="lbl">Remaining</div><div class="val" id="rem">--</div><div class="unit">Ah</div></div>
   <div class="card"><div class="lbl">Nominal</div><div class="val" id="nom">--</div><div class="unit">Ah</div></div>
   <div class="card"><div class="lbl">Temperature</div><div class="val" id="temp">--</div><div class="unit">°C</div></div>
+  <div class="card"><div class="lbl">Speed</div><div class="val" id="hb_speed">--</div><div class="unit">km/h</div></div>
+  <div class="card"><div class="lbl">Avg Speed</div><div class="val" id="hb_speed_avg">--</div><div class="unit">km/h</div></div>
+  <div class="card"><div class="lbl">Trip</div><div class="val" id="hb_trip">--</div><div class="unit">m</div></div>
+  <div class="card"><div class="lbl">Total</div><div class="val" id="hb_total">--</div><div class="unit">m</div></div>
+  <div class="card"><div class="lbl">ESC Temp</div><div class="val" id="hb_temp">--</div><div class="unit">°C</div></div>
+  <div class="card"><div class="lbl">Uptime</div><div class="val" id="hb_uptime">--</div><div class="unit">sec</div></div>
 </div>
 <div class="section">
   <div class="lbl">Cell Voltages</div>
@@ -281,6 +268,24 @@ function render(d){
   document.getElementById('nom').textContent=fmt(d.nominal_mah/1000);
   const t=d.temps.map(x=>fmt(x/10,1));
   document.getElementById('temp').textContent=t.length?t.join(' / '):'--';
+  // Heartbeat fetch
+  fetch('/heartbeat').then(r=>r.ok?r.json():null).then(hb=>{
+    if(hb){
+      document.getElementById('hb_speed').textContent=fmt(hb.speed_kmh,1);
+      document.getElementById('hb_speed_avg').textContent=fmt(hb.speed_average_kmh,1);
+      document.getElementById('hb_trip').textContent=hb.trip_distance_m;
+      document.getElementById('hb_total').textContent=hb.total_distance_m;
+      document.getElementById('hb_temp').textContent=fmt(hb.frame_temperature,1);
+      document.getElementById('hb_uptime').textContent=hb.uptime_s;
+    }else{
+      document.getElementById('hb_speed').textContent='--';
+      document.getElementById('hb_speed_avg').textContent='--';
+      document.getElementById('hb_trip').textContent='--';
+      document.getElementById('hb_total').textContent='--';
+      document.getElementById('hb_temp').textContent='--';
+      document.getElementById('hb_uptime').textContent='--';
+    }
+  });
   const ce=document.getElementById('cells');
   ce.innerHTML='';
   d.cells.forEach((mv,i)=>{
@@ -362,6 +367,9 @@ async function toggleKill(){
 document.getElementById('s-spoofval').addEventListener('input',function(){
   document.getElementById('s-spoof-lbl').textContent=this.value+'%';
 });
+document.getElementById('s-tailval').addEventListener('input',function(){
+  document.getElementById('s-tail-lbl').textContent=this.value+'%';
+});
 </script>
 </body>
 </html>
@@ -407,7 +415,7 @@ static void sendJbdWrite(uint8_t reg, const uint8_t* data, uint8_t len) {
 // ─── POST /bt — toggle JBD BMS Bluetooth ─────────────────────────────────────
 // !! Register 0xE1 is commonly cited for JBD BT control but is firmware-dependent.
 // !! Verify with a logic analyser or JBD PC software for your specific BMS.
-static void handleBtToggle() {
+void handleBtToggle() {
     btEnabled = !btEnabled;
     uint8_t val = btEnabled ? 0x01 : 0x00;
     sendJbdWrite(btReg, &val, 1);  // 0x01 = BT on, 0x00 = BT off
@@ -416,6 +424,7 @@ static void handleBtToggle() {
     webServer.send(200, "application/json",
         String("{\"bt\":") + (btEnabled ? "true" : "false") + "}");
 }
+
 
 // ─── POST /kill — toggle ESC kill ───────────────────────────────────────────────────
 static void buildSettingsJson(String& j) {
@@ -426,10 +435,10 @@ static void buildSettingsJson(String& j) {
     j += "\"soc_spoof_val\":" + String(socSpoofVal)                     + ",";
     j += "\"poll_ms\":"       + String(jbdPollMs)        + ",";
     j += "\"pack_cells\":"    + String(packCells)  + ",";
-    j += "\"wifi_ssid\":\""   + String(apSsid)     + "\"";
+    j += "\"wifi_ssid\":\""        + String(apSsid)                              + "\",";
 }
 
-static void handleKillToggle() {
+void handleKillToggle() {
     escKill = !escKill;
     Serial.printf("[Kill] ESC Kill %s\n", escKill ? "ON" : "OFF");
     String j = "{";
@@ -440,7 +449,7 @@ static void handleKillToggle() {
 }
 
 // ─── POST /settings — apply settings from modal ───────────────────────────────────
-static void handleSettings() {
+void handleSettings() {
     if (webServer.hasArg("bt")) {
         bool newBt = webServer.arg("bt") == "1";
         if (newBt != btEnabled) {
@@ -473,7 +482,9 @@ static void handleSettings() {
         s.trim();
         if (s.length() >= 1 && s.length() <= 32) {
             strlcpy(apSsid, s.c_str(), sizeof(apSsid));
+#if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
             prefs.putString("ssid", apSsid);
+#endif
             apRestartPending = true;
         }
     }
@@ -481,11 +492,13 @@ static void handleSettings() {
         String p = webServer.arg("apPass");
         if (p.length() >= 8 && p.length() <= 63) {
             strlcpy(apPass, p.c_str(), sizeof(apPass));
+#if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
             prefs.putString("pass", apPass);
+#endif
             apRestartPending = true;
         }
     }
-    Serial.printf("[Settings] kill=%d spoof=%d(%d%%) poll=%lums cells=%dS ssid=%s\n",
+    Serial.printf("[Settings] kill=%d spoof=%d(%d%%) poll=%ums cells=%dS ssid=%s\n",
         escKill, socSpoof, socSpoofVal, jbdPollMs, packCells, apSsid);
     String j = "{";
     buildSettingsJson(j);
@@ -495,7 +508,7 @@ static void handleSettings() {
 }
 
 // ─── /data — JSON battery snapshot ───────────────────────────────────────────
-static void handleData() {
+void handleData() {
     String j = "{";
     j += "\"valid\":"         + String(batt.valid ? "true" : "false") + ",";
     j += "\"voltage_mv\":"    + String(batt.voltage_mv)    + ",";
@@ -526,7 +539,7 @@ static void handleData() {
 }
 
 // ─── / — HTML dashboard ───────────────────────────────────────────────────────
-static void handleRoot() {
+void handleRoot() {
     webServer.sendHeader("Cache-Control", "no-cache");
     webServer.send_P(200, "text/html", HTML_PAGE);
 }
@@ -685,7 +698,7 @@ static uint8_t buildM365Packet(uint8_t* out, uint8_t src, uint8_t dst,
  *   [7-8]  Remaining capacity mAh (uint16 LE)
  *   [9]    Number of cells (uint8)
  */
-static uint8_t buildBmsStatusPacket(uint8_t* out) {
+uint8_t buildBmsStatusPacket(uint8_t* out) {
     uint8_t payload[10];
 
     // Apply ESC kill (zero SoC+voltage) or SoC spoof override
@@ -733,7 +746,7 @@ static uint8_t buildBmsStatusPacket(uint8_t* out) {
  * Build a BMS cell-voltage packet (BMS->ESC, cmd 0x02 — verify cmd byte).
  * Payload: [cell_count] then cell_count * uint16_LE voltages in mV.
  */
-static uint8_t buildBmsCellPacket(uint8_t* out) {
+uint8_t buildBmsCellPacket(uint8_t* out) {
     uint8_t payload[1 + 20 * 2];
     uint8_t n = batt.cell_count;
     if (n > 20) n = 20;
@@ -753,7 +766,7 @@ static uint8_t buildBmsCellPacket(uint8_t* out) {
  * Consume bytes from m365Serial and respond to ESC requests.
  * ESC sends read-request packets addressed to BMS (dst == ADDR_BMS).
  */
-static void processM365Input() {
+void processM365Input() {
     while (m365Serial.available()) {
         uint8_t b = (uint8_t)m365Serial.read();
 
@@ -787,23 +800,44 @@ static void processM365Input() {
             continue;
         }
 
+        uint8_t src = m365RxBuf[3];
         uint8_t dst = m365RxBuf[4];
         uint8_t cmd = m365RxBuf[5];
+        uint8_t dataLen = (pkt_len >= 3) ? pkt_len - 3 : 0;
+
+        // ── Raw packet log — helps identify light control cmd byte ──
+        // Remove or guard with #ifdef once cmd is found.
+        Serial.printf("[M365] src=%02X dst=%02X cmd=%02X data(%u):", src, dst, cmd, dataLen);
+        for (uint8_t i = 0; i < dataLen && i < 16; i++)
+            Serial.printf(" %02X", m365RxBuf[6 + i]);
+        Serial.println();
 
         // ESC polling BMS
-        if (dst == ADDR_BMS && batt.valid) {
+        if (dst == ADDR_BMS) {
             uint8_t resp[64];
             uint8_t respLen = 0;
 
             switch (cmd) {
                 case 0x01:  // Basic status request
-                    respLen = buildBmsStatusPacket(resp);
+                    if (batt.valid) respLen = buildBmsStatusPacket(resp);
                     break;
                 case 0x02:  // Cell voltage request
-                    respLen = buildBmsCellPacket(resp);
+                    if (batt.valid) respLen = buildBmsCellPacket(resp);
+                    break;
+                // ── Taillight / brake light control ──
+                // TODO: replace 0xFF with real cmd byte once identified from log.
+                // Data byte [0]: 0x01 = on, 0x00 = off  (verify from capture)
+                case 0xFF:
+                    if (dataLen >= 1) {
+                        bool lightOn = (m365RxBuf[6] & 0x01) != 0;
+                        Serial.printf("[Light] ESC cmd taillight %s\n", lightOn ? "ON" : "OFF");
+                        // Override brightness logic: ESC says on → full duty; off → running level
+                        // Taillight is controller-switched; do not drive MOSFET.
+                    }
+                    respLen = buildM365Packet(resp, ADDR_BMS, ADDR_ESC, cmd, nullptr, 0);
                     break;
                 default:
-                    // Unknown command — send empty ACK so ESC doesn't hang
+                    // Unknown command — ACK so ESC doesn't hang
                     respLen = buildM365Packet(resp, ADDR_BMS, ADDR_ESC, cmd, nullptr, 0);
                     break;
             }
@@ -812,6 +846,42 @@ static void processM365Input() {
         }
 
         m365RxLen = 0;
+    }
+}
+
+// ─── JBD timer state ───────────────────────────────────────────────────────
+static uint32_t lastJbdPoll  = 0;
+static uint32_t lastM365Push = 0;
+
+// ─── protocol initialization and JBD polling ─────────────────────────────────
+void protocolInit() {
+#if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
+    jbdSerial.begin(9600, SERIAL_8N1, JBD_RX, JBD_TX);
+    m365Serial.begin(115200, SERIAL_8N1, M365_RX, M365_TX);
+#elif defined(ESP8266)
+    jbdSerial.begin(9600);
+    m365Serial.begin(115200);
+#endif
+    batt = {};
+    batt.valid = false;
+}
+
+void pollJbd() {
+    if (millis() - lastJbdPoll < jbdPollMs) return;
+    lastJbdPoll = millis();
+
+    batt.valid = false;
+    while (jbdSerial.available()) jbdSerial.read();
+    jbdSerial.write(JBD_CMD_BASIC, sizeof(JBD_CMD_BASIC));
+    if (readJbdResponse() && parseJbdBasicInfo(jbdRxBuf, jbdRxLen)) {
+        while (jbdSerial.available()) jbdSerial.read();
+        delay(20);
+        jbdSerial.write(JBD_CMD_CELLS, sizeof(JBD_CMD_CELLS));
+        if (readJbdResponse()) {
+            parseJbdCellInfo(jbdRxBuf, jbdRxLen);
+        }
+    } else {
+        Serial.println("[JBD] basic info read failed");
     }
 }
 
@@ -831,94 +901,18 @@ static void wifiInit() {
     apStartMs = millis();  // start idle countdown
 }
 
-// ─── Timestamps ──────────────────────────────────────────────────────────────
-static uint32_t lastJbdPoll  = 0;
-static uint32_t lastM365Push = 0;
-
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
     Serial.println("[bridge] JBD<->M365 bridge starting");
-
-    jbdSerial.begin(9600,   SERIAL_8N1, JBD_RX,  JBD_TX);
-    m365Serial.begin(115200, SERIAL_8N1, M365_RX, M365_TX);
-
-    memset(&batt, 0, sizeof(batt));
-    prefs.begin("bridge", false);
-    strlcpy(apSsid, prefs.getString("ssid", "M365-BMS").c_str(), sizeof(apSsid));
-    strlcpy(apPass, prefs.getString("pass", "m365batt").c_str(), sizeof(apPass));
-    wifiInit();
+    hardwareInit();
+    protocolInit();
+    webserverInit();
 }
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
 void loop() {
-    uint32_t now = millis();
-
-    // ── Poll JBD BMS ──
-    if (now - lastJbdPoll >= jbdPollMs) {
-        lastJbdPoll = now;
-
-        // Read basic info (voltage, current, SoC, temps)
-        jbdSerial.write(JBD_CMD_BASIC, sizeof(JBD_CMD_BASIC));
-        if (readJbdResponse()) {
-            if (!parseJbdBasicInfo(jbdRxBuf, jbdRxLen)) {
-                Serial.println("[JBD] Basic info parse failed");
-            }
-        } else {
-            Serial.println("[JBD] Basic info timeout");
-            batt.valid = false;
-        }
-
-        // Read cell voltages
-        jbdSerial.write(JBD_CMD_CELLS, sizeof(JBD_CMD_CELLS));
-        if (readJbdResponse()) {
-            parseJbdCellInfo(jbdRxBuf, jbdRxLen);
-        }
-
-        // Debug output
-        if (batt.valid) {
-            Serial.printf("[JBD] %umV  %dmA  SoC=%u%%  %umAh/%umAh  T=%d.%d°C\n",
-                batt.voltage_mv, batt.current_ma, batt.soc_pct,
-                batt.remaining_mah, batt.nominal_mah,
-                batt.temp_c10[0] / 10, abs(batt.temp_c10[0] % 10));
-        }
-    }
-
-    // ── Handle ESC requests ──
+    pollJbd();
     processM365Input();
-
-    // ── AP restart (SSID/pass changed) ──
-    if (apRestartPending) {
-        apRestartPending = false;
-        Serial.printf("[WiFi] Restarting AP as '%s'\n", apSsid);
-        WiFi.softAPdisconnect(false);
-        delay(100);
-        WiFi.softAP(apSsid, apPass);
-        apStartMs = millis();
-        apActive  = true;
-    }
-
-    // ── AP idle-shutdown check ──
-    if (apActive && (now - apStartMs >= AP_IDLE_MS)) {
-        if (WiFi.softAPgetStationNum() == 0) {
-            Serial.println("[WiFi] No client after 2 min — shutting down AP");
-            webServer.stop();
-            WiFi.softAPdisconnect(true);  // true = also disables radio
-            apActive = false;
-        } else {
-            // At least one client present — keep AP alive indefinitely
-            apStartMs = now;  // push check 2 min into future so we don't spin
-        }
-    }
-
-    // ── Serve web clients ──
-    if (apActive) webServer.handleClient();
-
-    // ── Periodically push BMS status to ESC (unsolicited) ──
-    if (batt.valid && (now - lastM365Push >= M365_PUSH_MS)) {
-        lastM365Push = now;
-        uint8_t pkt[64];
-        uint8_t len = buildBmsStatusPacket(pkt);
-        m365Serial.write(pkt, len);
-    }
+    webserverLoop();
 }
