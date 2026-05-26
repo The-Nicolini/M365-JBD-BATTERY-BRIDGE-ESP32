@@ -45,11 +45,21 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <Update.h>
 #elif defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <EEPROM.h>
 #include <SoftwareSerial.h>
+#include <Updater.h>
+#endif
+
+#if defined(ESP8266)
+#define OTA_BEGIN_SIZE(size) (size)
+#define OTA_ERROR_STRING() Update.getErrorString().c_str()
+#else
+#define OTA_BEGIN_SIZE(size) ((size) == 0 ? UPDATE_SIZE_UNKNOWN : (size))
+#define OTA_ERROR_STRING() Update.errorString()
 #endif
 
 // ─── Pin config ───────────────────────────────────────────────────────────────
@@ -92,6 +102,12 @@ static volatile bool     socSpoof     = false;   // report fixed SoC to M365 ESC
 static volatile uint8_t  socSpoofVal  = 100;     // spoofed SoC %
 static uint32_t          jbdPollMs    = JBD_POLL_MS; // runtime-configurable poll interval
 static uint8_t           packCells    = 10;          // series cell count — maps real voltage to M365 10S range
+static volatile bool     otaEnabled   = false;      // allow firmware updates through web interface
+static volatile uint8_t  dashDriveMode = 1;        // X1 mode field: 0=stall,1=drive,2=eco stall,3=eco drive
+static volatile bool     dashLightOn   = false;    // simulated dash light state
+static volatile uint8_t  dashBattPct   = 100;      // dash battery percent for simulated frame
+static volatile uint8_t  dashSpeedKmh  = 0;        // dash speed value for simulated frame
+static volatile uint8_t  dashBeepAction = 0;        // X1 beep/action field for simulated frame
 
 // ─── AP auto-shutdown ────────────────────────────────────────────────────────
 // If no client connects within AP_IDLE_MS of boot, disable WiFi AP.
@@ -130,8 +146,10 @@ h1{font-size:1.1rem;color:var(--accent);letter-spacing:.05em;text-transform:uppe
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
 .dot.ok{background:var(--accent)}.dot.warn{background:var(--warn)}.dot.err{background:var(--err)}
 .hdr{position:relative;margin-bottom:16px}
-.gear{position:absolute;top:0;right:0;font-size:1.4rem;cursor:pointer;color:var(--muted);user-select:none;line-height:1}
+.gear{position:absolute;top:0;font-size:1.4rem;cursor:pointer;color:var(--muted);user-select:none;line-height:1}
 .gear:hover{color:var(--text)}
+.gear.test{right:2.8rem;}
+.gear.settings{right:0;}
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:10;align-items:center;justify-content:center}
 .overlay.open{display:flex}
 .modal{background:var(--card);border-radius:12px;padding:20px;width:min(360px,92vw);max-height:85vh;overflow-y:auto}
@@ -158,7 +176,8 @@ h1{font-size:1.1rem;color:var(--accent);letter-spacing:.05em;text-transform:uppe
 <body>
 <div class="hdr">
   <h1 style="margin:0">M365 Battery Monitor</h1>
-  <span class="gear" onclick="document.getElementById('ov').classList.add('open')" title="Settings">&#9881;</span>
+  <span class="gear test" onclick="document.getElementById('ov_test').classList.add('open')" title="Scooter Test">&#x1F6B2;</span>
+  <span class="gear settings" onclick="document.getElementById('ov').classList.add('open')" title="Settings">&#9881;</span>
 </div>
 <div class="grid">
   <div class="card"><div class="lbl">Voltage</div><div class="val" id="volt">--</div><div class="unit">V</div></div>
@@ -244,7 +263,46 @@ h1{font-size:1.1rem;color:var(--accent);letter-spacing:.05em;text-transform:uppe
     <div style="display:flex;justify-content:space-between;font-size:.8rem"><span>SoC Value</span><span id="s-spoof-lbl">100%</span></div>
     <input type="range" id="s-spoofval" min="0" max="100" value="100" style="accent-color:var(--accent)">
   </div>
+  <div class="ssect">OTA Updates</div>
+  <div class="srow">
+    <div><div class="slbl">Firmware uploads</div><div class="ssub">Enable web-based OTA firmware updates</div></div>
+    <label class="tgl"><input type="checkbox" id="s-ota"><span class="tgl-sl"></span></label>
+  </div>
+  <div class="srow" style="flex-direction:column;align-items:flex-start;gap:4px">
+    <div class="ssub">When enabled, visit <a href="/update" target="_blank" style="color:var(--accent)">/update</a> to upload firmware.</div>
+  </div>
   <button class="sapply" onclick="applySettings()">Apply</button>
+</div></div>
+<div class="overlay" id="ov_test" onclick="if(event.target===this)this.classList.remove('open')">
+<div class="modal">
+  <div class="mhdr"><h2>Scooter Test</h2><span class="mcls" onclick="document.getElementById('ov_test').classList.remove('open')">&#x2715;</span></div>
+  <div class="srow" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+    <button class="sapply" style="flex:1 1 48%;" onclick="sendScooterCmd('cruise_on')">Cruise ON</button>
+    <button class="sapply" style="flex:1 1 48%;" onclick="sendScooterCmd('cruise_off')">Cruise OFF</button>
+  </div>
+  <div class="srow" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+    <button class="sapply" style="flex:1 1 48%;" onclick="sendScooterCmd('lights_on')">Lights ON</button>
+    <button class="sapply" style="flex:1 1 48%;" onclick="sendScooterCmd('lights_off')">Lights OFF</button>
+  </div>
+  <div class="srow" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+    <button class="sapply" style="flex:1 1 32%;" onclick="sendScooterCmd('regen_0')">Regen 0</button>
+    <button class="sapply" style="flex:1 1 32%;" onclick="sendScooterCmd('regen_1')">Regen 1</button>
+    <button class="sapply" style="flex:1 1 32%;" onclick="sendScooterCmd('regen_2')">Regen 2</button>
+  </div>
+  <div class="srow" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+    <button class="sapply" style="flex:1 1 32%;" onclick="sendScooterCmd('dash_mode_0')">Mode 0</button>
+    <button class="sapply" style="flex:1 1 32%;" onclick="sendScooterCmd('dash_mode_1')">Mode 1</button>
+    <button class="sapply" style="flex:1 1 32%;" onclick="sendScooterCmd('dash_mode_2')">Mode 2</button>
+  </div>
+  <div class="srow" style="flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+    <button class="sapply" style="flex:1 1 48%;" onclick="sendScooterCmd('dash_light_on')">Dash Lights ON</button>
+    <button class="sapply" style="flex:1 1 48%;" onclick="sendScooterCmd('dash_light_off')">Dash Lights OFF</button>
+  </div>
+  <div class="srow" style="flex-direction:column;align-items:flex-start;gap:8px">
+    <div class="slbl">Experimental scooter/dash test</div>
+    <div class="ssub">These buttons send test packets on the M365 UART. Dash/display commands are experimental and may not reach the internal controller.</div>
+    <div class="ssub">Current dash state: <span id="dash-mode-label">Mode 1</span>, <span id="dash-light-label">Lights OFF</span></div>
+  </div>
 </div></div>
 <div class="foot"><div class="dot" id="dot"></div><span id="status">connecting&#x2026;</span></div>
 <script>
@@ -337,7 +395,15 @@ function syncSettings(d){
   if(d.soc_spoof_val!=null){const v=d.soc_spoof_val;document.getElementById('s-spoofval').value=v;document.getElementById('s-spoof-lbl').textContent=v+'%';}
   if(d.poll_ms!=null){const sel=document.getElementById('s-poll');for(const o of sel.options)if(parseInt(o.value)===d.poll_ms){o.selected=true;break;}}
   if(d.pack_cells!=null){const sel=document.getElementById('s-packcells');for(const o of sel.options)if(parseInt(o.value)===d.pack_cells){o.selected=true;break;}}
+  if(d.ota_enabled!=null) document.getElementById('s-ota').checked=d.ota_enabled;
   if(d.wifi_ssid!=null) document.getElementById('s-ssid').value=d.wifi_ssid;
+  if(d.dash_drive_mode!=null){
+    const modeLabels = ['Mode 0','Mode 1','Mode 2'];
+    document.getElementById('dash-mode-label').textContent = modeLabels[d.dash_drive_mode] || ('Mode ' + d.dash_drive_mode);
+  }
+  if(d.dash_light_on!=null){
+    document.getElementById('dash-light-label').textContent = d.dash_light_on ? 'Lights ON' : 'Lights OFF';
+  }
 }
 async function applySettings(){
   const body=new URLSearchParams({
@@ -348,6 +414,7 @@ async function applySettings(){
     socSpoofVal:document.getElementById('s-spoofval').value,
     pollMs:document.getElementById('s-poll').value,
     packCells:document.getElementById('s-packcells').value,
+    otaEnabled:document.getElementById('s-ota').checked?'1':'0',
     apSsid:document.getElementById('s-ssid').value,
     apPass:document.getElementById('s-pass').value
   });
@@ -361,14 +428,21 @@ async function applySettings(){
     document.getElementById('s-pass').value='';
   }catch(e){}
 }
+async function sendScooterCmd(action){
+  try{
+    const r=await fetch('/scooter',{method:'POST',body:new URLSearchParams({action})});
+    if(!r.ok) throw new Error(await r.text());
+    const d=await r.json();
+    alert('Scooter command sent: '+d.action);
+  }catch(e){
+    alert('Scooter command failed: '+e.message);
+  }
+}
 async function toggleKill(){
   try{const r=await fetch('/kill',{method:'POST'});syncSettings(await r.json());}catch(e){}
 }
 document.getElementById('s-spoofval').addEventListener('input',function(){
   document.getElementById('s-spoof-lbl').textContent=this.value+'%';
-});
-document.getElementById('s-tailval').addEventListener('input',function(){
-  document.getElementById('s-tail-lbl').textContent=this.value+'%';
 });
 </script>
 </body>
@@ -428,14 +502,52 @@ void handleBtToggle() {
 
 // ─── POST /kill — toggle ESC kill ───────────────────────────────────────────────────
 static void buildSettingsJson(String& j) {
-    j += "\"bt_enabled\":"    + String(btEnabled    ? "true" : "false") + ",";
-    j += "\"bt_reg\":"        + String(btReg)                           + ",";
-    j += "\"esc_kill\":"      + String(escKill      ? "true" : "false") + ",";
-    j += "\"soc_spoof\":"     + String(socSpoof     ? "true" : "false") + ",";
-    j += "\"soc_spoof_val\":" + String(socSpoofVal)                     + ",";
-    j += "\"poll_ms\":"       + String(jbdPollMs)        + ",";
-    j += "\"pack_cells\":"    + String(packCells)  + ",";
-    j += "\"wifi_ssid\":\""        + String(apSsid)                              + "\",";
+    j += "\"bt_enabled\":"    + String(btEnabled    ? "true" : "false");
+    j += ",\"bt_reg\":"        + String(btReg);
+    j += ",\"esc_kill\":"      + String(escKill      ? "true" : "false");
+    j += ",\"soc_spoof\":"     + String(socSpoof     ? "true" : "false");
+    j += ",\"soc_spoof_val\":" + String(socSpoofVal);
+    j += ",\"poll_ms\":"       + String(jbdPollMs);
+    j += ",\"pack_cells\":"    + String(packCells);
+    j += ",\"ota_enabled\":"   + String(otaEnabled   ? "true" : "false");
+    j += ",\"dash_drive_mode\":"+ String(dashDriveMode);
+    j += ",\"dash_light_on\":"  + String(dashLightOn  ? "true" : "false");
+    j += ",\"dash_batt_pct\":"  + String(dashBattPct);
+    j += ",\"dash_speed_kmh\":" + String(dashSpeedKmh);
+    j += ",\"wifi_ssid\":\""        + String(apSsid)                              + "\"";
+}
+
+static uint16_t dashFrameCrc(uint8_t len, const uint8_t* data) {
+    uint32_t sum = len;
+    for (uint8_t i = 0; i < 7; i++) sum += data[i];
+    return (uint16_t)sum ^ 0xFFFF;
+}
+
+static uint8_t buildDashFrame(uint8_t* out, uint8_t battPct, uint8_t speedKmh, uint8_t driveMode, bool lightOn, uint8_t beepAction) {
+    // X1-style frame for source 0x21, type 0x64
+    // Body payload fields: mode, battleds, light, beepaction
+    (void)speedKmh;
+    uint8_t leds = (battPct >= 100) ? 5 : (battPct / 20);
+    if (leds > 5) leds = 5;
+    uint8_t N = lightOn ? 0x64 : 0x00;
+    uint8_t B = beepAction;
+    const uint8_t LEN = 6;
+    uint8_t body[7];
+    body[0] = 0x21;
+    body[1] = 0x64;
+    body[2] = 0x00;
+    body[3] = driveMode;
+    body[4] = leds;
+    body[5] = N;
+    body[6] = B;
+    uint16_t crc = dashFrameCrc(LEN, body);
+    out[0] = 0x55;
+    out[1] = 0xAA;
+    out[2] = LEN;
+    memcpy(&out[3], body, sizeof(body));
+    out[10] = crc & 0xFF;
+    out[11] = (crc >> 8) & 0xFF;
+    return 12;
 }
 
 void handleKillToggle() {
@@ -498,6 +610,13 @@ void handleSettings() {
             apRestartPending = true;
         }
     }
+    if (webServer.hasArg("otaEnabled")) {
+        otaEnabled = webServer.arg("otaEnabled") == "1";
+#if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
+        prefs.putBool("ota", otaEnabled);
+#endif
+        Serial.printf("[Settings] OTA updates %s\n", otaEnabled ? "ENABLED" : "DISABLED");
+    }
     Serial.printf("[Settings] kill=%d spoof=%d(%d%%) poll=%ums cells=%dS ssid=%s\n",
         escKill, socSpoof, socSpoofVal, jbdPollMs, packCells, apSsid);
     String j = "{";
@@ -507,17 +626,144 @@ void handleSettings() {
     webServer.send(200, "application/json", j);
 }
 
+void handleOtaPage() {
+    if (!otaEnabled) {
+        webServer.send(404, "text/plain", "OTA updates are disabled.");
+        return;
+    }
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>OTA Firmware Upload</title></head>"
+                  "<body style='background:#111;color:#eee;font-family:system-ui,sans-serif;padding:20px;'>"
+                  "<h1>OTA Firmware Upload</h1>"
+                  "<p>Upload a new firmware binary. Device will reboot automatically when the update finishes.</p>"
+                  "<form method='POST' action='/update' enctype='multipart/form-data'>"
+                  "<input type='file' name='update' accept='.bin' required style='margin-bottom:12px;display:block;'>"
+                  "<button type='submit' style='padding:10px 16px;border:none;border-radius:6px;background:#00c853;color:#111;font-weight:700;cursor:pointer;'>Upload</button>"
+                  "</form></body></html>";
+    webServer.send(200, "text/html", html);
+}
+
+void handleOtaUpload() {
+    static bool otaStarted = false;
+    if (!otaEnabled) return;
+    HTTPUpload& upload = webServer.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+        otaStarted = false;
+        size_t size = upload.totalSize;
+        Serial.printf("[OTA] Upload start: %s (%u bytes)\n", upload.filename.c_str(), size);
+        if (size == 0) {
+            Serial.println("[OTA] begin failed: missing upload size");
+            return;
+        }
+        otaStarted = Update.begin(OTA_BEGIN_SIZE(size));
+        if (!otaStarted) {
+            Serial.printf("[OTA] begin failed: %s\n", OTA_ERROR_STRING());
+        }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (!otaStarted) return;
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+            Serial.printf("[OTA] write failed: %s\n", OTA_ERROR_STRING());
+            otaStarted = false;
+        }
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (!otaStarted) {
+            Serial.println("[OTA] Update aborted: start failed");
+            return;
+        }
+        if (Update.end(true)) {
+            Serial.printf("[OTA] Update complete: %u bytes\n", upload.totalSize);
+        } else {
+            Serial.printf("[OTA] Update failed: %s\n", OTA_ERROR_STRING());
+        }
+        otaStarted = false;
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+        Update.end();
+        otaStarted = false;
+        Serial.println("[OTA] Upload aborted");
+    }
+}
+
+void handleOtaUpdate() {
+    if (!otaEnabled) {
+        webServer.send(403, "text/plain", "OTA updates are disabled.");
+        return;
+    }
+    if (Update.hasError()) {
+        webServer.send(500, "text/plain", "OTA update failed. Check serial log for details.");
+        return;
+    }
+    webServer.sendHeader("Connection", "close");
+    webServer.send(200, "text/plain", "Update successful. Rebooting...");
+    delay(100);
+    ESP.restart();
+}
+
+void handleScooterCmd() {
+    if (!webServer.hasArg("action")) {
+        webServer.send(400, "application/json", "{\"error\":\"missing action\"}");
+        return;
+    }
+    String action = webServer.arg("action");
+    uint8_t buf[16];
+    uint8_t len = 0;
+
+    dashBattPct = socSpoof ? socSpoofVal : batt.soc_pct;
+    int speed = (int)round(lastMotorInfo.speed_kmh);
+    dashSpeedKmh = (uint8_t)constrain(speed < 0 ? 0 : speed, 0, 255);
+
+    if (action == "cruise_on") {
+        len = build_write_cruise(buf, true);
+    } else if (action == "cruise_off") {
+        len = build_write_cruise(buf, false);
+    } else if (action == "lights_on") {
+        len = build_write_led(buf, true);
+    } else if (action == "lights_off") {
+        len = build_write_led(buf, false);
+    } else if (action == "regen_0") {
+        len = build_write_regen(buf, 0);
+    } else if (action == "regen_1") {
+        len = build_write_regen(buf, 1);
+    } else if (action == "regen_2") {
+        len = build_write_regen(buf, 2);
+    } else if (action == "dash_mode_0") {
+        dashDriveMode = 0;
+        len = buildDashFrame(buf, dashBattPct, dashSpeedKmh, dashDriveMode, dashLightOn, dashBeepAction);
+    } else if (action == "dash_mode_1") {
+        dashDriveMode = 1;
+        len = buildDashFrame(buf, dashBattPct, dashSpeedKmh, dashDriveMode, dashLightOn, dashBeepAction);
+    } else if (action == "dash_mode_2") {
+        dashDriveMode = 2;
+        len = buildDashFrame(buf, dashBattPct, dashSpeedKmh, dashDriveMode, dashLightOn, dashBeepAction);
+    } else if (action == "dash_light_on") {
+        dashLightOn = true;
+        len = buildDashFrame(buf, dashBattPct, dashSpeedKmh, dashDriveMode, dashLightOn, dashBeepAction);
+    } else if (action == "dash_light_off") {
+        dashLightOn = false;
+        len = buildDashFrame(buf, dashBattPct, dashSpeedKmh, dashDriveMode, dashLightOn, dashBeepAction);
+    } else {
+        webServer.send(400, "application/json", "{\"error\":\"unknown action\"}");
+        return;
+    }
+
+    if (len > 0) {
+        m365Serial.write(buf, len);
+        webServer.sendHeader("Cache-Control", "no-cache");
+        webServer.send(200, "application/json", String("{\"ok\":true,\"action\":\"") + action + "\",\"dash_drive_mode\":" + String(dashDriveMode) + ",\"dash_light_on\":" + String(dashLightOn ? "true" : "false") + "}");
+    } else {
+        webServer.send(500, "application/json", "{\"error\":\"failed to build command\"}");
+    }
+}
+
 // ─── /data — JSON battery snapshot ───────────────────────────────────────────
 void handleData() {
     String j = "{";
-    j += "\"valid\":"         + String(batt.valid ? "true" : "false") + ",";
-    j += "\"voltage_mv\":"    + String(batt.voltage_mv)    + ",";
-    j += "\"current_ma\":"    + String(batt.current_ma)    + ",";
-    j += "\"soc_pct\":"       + String(batt.soc_pct)       + ",";
-    j += "\"remaining_mah\":" + String(batt.remaining_mah) + ",";
-    j += "\"nominal_mah\":"   + String(batt.nominal_mah)   + ",";
-    j += "\"prot_status\":"   + String(batt.prot_status)   + ",";
-    j += "\"ntc_count\":"     + String(batt.ntc_count)     + ",";
+    j += "\"valid\":"         + String(batt.valid ? "true" : "false");
+    j += ",\"voltage_mv\":"    + String(batt.voltage_mv);
+    j += ",\"current_ma\":"    + String(batt.current_ma);
+    j += ",\"soc_pct\":"       + String(batt.soc_pct);
+    j += ",\"remaining_mah\":" + String(batt.remaining_mah);
+    j += ",\"nominal_mah\":"   + String(batt.nominal_mah);
+    j += ",\"prot_status\":"   + String(batt.prot_status);
+    j += ",\"ntc_count\":"     + String(batt.ntc_count);
     j += "\"temps\":[";
     for (uint8_t i = 0; i < batt.ntc_count; i++) {
         if (i) j += ",";
@@ -906,6 +1152,15 @@ void setup() {
     Serial.begin(115200);
     Serial.println("[bridge] JBD<->M365 bridge starting");
     hardwareInit();
+#if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
+    {
+        String ssid = prefs.getString("ssid", "");
+        if (ssid.length()) strlcpy(apSsid, ssid.c_str(), sizeof(apSsid));
+        String pass = prefs.getString("pass", "");
+        if (pass.length()) strlcpy(apPass, pass.c_str(), sizeof(apPass));
+        otaEnabled = prefs.getBool("ota", false);
+    }
+#endif
     protocolInit();
     webserverInit();
 }

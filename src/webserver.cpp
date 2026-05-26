@@ -39,6 +39,10 @@ void handleData();
 void handleBtToggle();
 void handleKillToggle();
 void handleSettings();
+void handleScooterCmd();
+void handleOtaPage();
+void handleOtaUpload();
+void handleOtaUpdate();
 
 #if defined(ESP32) || defined(ESP32S3) || defined(ESP32C3)
 WebServer webServer(80);
@@ -55,6 +59,9 @@ void webserverInit() {
     webServer.on("/bt",       HTTP_POST, handleBtToggle);
     webServer.on("/kill",     HTTP_POST, handleKillToggle);
     webServer.on("/settings", HTTP_POST, handleSettings);
+    webServer.on("/scooter",  HTTP_POST, handleScooterCmd);
+    webServer.on("/update",   HTTP_GET,  handleOtaPage);
+    webServer.on("/update",   HTTP_POST, handleOtaUpdate, handleOtaUpload);
     webServer.on("/heartbeat", HTTP_GET, handleHeartbeat);
     webServer.begin();
     Serial.println("[WiFi] HTTP server started on port 80");
