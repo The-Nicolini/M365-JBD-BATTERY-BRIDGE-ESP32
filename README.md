@@ -29,6 +29,17 @@ Supports both **ESP32-S3** and **ESP8266 D1 Mini** variants. The board taps into
 
 ---
 
+## New features
+
+- Experimental scooter test panel in the web dashboard for direct command testing.
+- Added UI buttons for `cruise`, `lights`, and `regen` control over the M365 UART path.
+- Added experimental dash/display packet testing using Xiaomi X1-style `0x55 0xAA` frames to change mode and light state.
+- Added a clearer notice that dash/display commands are experimental and may not reach the internal controller.
+- ESP8266 D1 Mini support is now included and verified for upload.
+- OTA firmware update toggle available through the dashboard settings.
+
+---
+
 ## Hardware
 
 | Part | Notes |
@@ -152,6 +163,7 @@ pio run --target upload --upload-port /dev/ttyUSB0  # Linux
 | Control | Function |
 |---|---|
 | ⚡ ESC Kill | Reports SoC = 0 and voltage = 0 to the ESC → motor disabled instantly |
+| 🧪 Scooter Test | Opens the experimental scooter/dash test page for cruise, lights, regen, and dash mode packets |
 
 ---
 
@@ -229,4 +241,5 @@ MIT — do what you want, no warranty.
 
 > **⚠ Not yet physically tested.**  
 > The firmware compiles and the web dashboard works over WiFi, but the full JBD ↔ ESP32 ↔ M365 ESC chain has not been validated on real hardware at time of writing.  
+> The new dash/display packet test path is experimental and may not reach the internal controller.  
 > Hardware testing is in progress — this notice will be removed once confirmed working.
