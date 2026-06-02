@@ -61,4 +61,4 @@ platformio run --environment esp32s3 --target upload
 
 ## License
 
-This project does not include a specific license file. Add one if you want to publish or share it.
+This project is licensed under the MIT License. See the `LICENSE` file for full terms.
