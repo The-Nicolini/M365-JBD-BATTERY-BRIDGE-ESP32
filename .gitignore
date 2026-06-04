@@ -5,5 +5,4 @@
 .vscode/ipch
 
 # Ignore local screenshot and temporary folders created during development
-screenshots/
 extra/
