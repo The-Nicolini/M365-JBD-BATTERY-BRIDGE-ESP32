@@ -3,6 +3,8 @@
 #include "ArduinoOTA.h"
 #include "EEPROM.h"
 #include <WebServer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "wifi_network.h"
 #include "webui.h"
 #include "bms.h"
@@ -13,6 +15,7 @@ HardwareSerial M365Serial(1);
 uint8_t frame_buf[FRAME_BUF_SIZE];
 size_t frame_len = 0;
 unsigned long next_query = 0;
+unsigned long lastStationReconnect = 0;
 uint8_t next_query_index = 0;
 
 WebServer server(80);
@@ -48,9 +51,12 @@ void setup() {
     ota_enabled = wifiSettings.ota_enabled;
     M365BaudRate = g_Settings.m365_baud;
 
+    // Start UART comms first using persisted settings
     JbdSerial.begin(JBD_UART_BAUD, SERIAL_8N1, JBD_UART_RX_PIN, JBD_UART_TX_PIN);
     M365Serial.begin(M365BaudRate, SERIAL_8N1, M365_UART_RX_PIN, M365_UART_TX_PIN);
+    Serial.printf("Sketch running on core %d\n", xPortGetCoreID());
 
+    // Perform BMS conversion / data initialization before bringing up Wi-Fi
     updateM365Data();
     connectOrStartAP();
     registerWebRoutes();
@@ -68,11 +74,31 @@ void loop() {
     if (ota_enabled) {
         ArduinoOTA.handle();
     }
+    checkApTimeout();
     process_uart_data();
     processM365Serial();
 
+    if (use_existing_network && station_ssid.length() > 0) {
+        if (stationReconnectActive()) {
+            processStationReconnect();
+        } else if (WiFi.status() != WL_CONNECTED) {
+            unsigned long reconnectIntervalMs = (unsigned long)wifiSettings.station_reconnect_interval * 1000UL;
+            if (reconnectIntervalMs < 1000UL) {
+                reconnectIntervalMs = 1000UL;
+            }
+            if (millis() - lastStationReconnect >= reconnectIntervalMs) {
+                lastStationReconnect = millis();
+                startStationConnect();
+            }
+        }
+    }
+
     if (millis() >= next_query) {
-        next_query += JBD_QUERY_INTERVAL_MS;
+        unsigned long interval = g_Settings.bms_poll_interval_ms;
+        if (interval < 200) {
+            interval = JBD_QUERY_INTERVAL_MS;
+        }
+        next_query += interval;
         switch (next_query_index) {
             case 0:
                 send_query(REQUEST_BASIC, sizeof(REQUEST_BASIC), "basic info");

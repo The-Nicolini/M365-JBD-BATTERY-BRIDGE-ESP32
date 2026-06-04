@@ -38,6 +38,32 @@ platformio run --environment esp32s3 --target upload
 3. Open `http://192.168.4.1/` in your browser.
 4. Configure Wi-Fi, OTA, and M365 settings from the web UI.
 
+## Web UI Overview
+
+### Main dashboard
+- Live bridge status and battery metrics.
+- Voltage, current, state-of-charge, and cycle count.
+- Pack summary, fault/protection state, balancing status, cell voltages, and NTC temperatures are updated continuously.
+
+![Root UI](screenshots/root-ui.png)
+
+### Settings page
+- Device name / hostname.
+- AP SSID/password and optional station network selection.
+- OTA enable toggle for remote firmware upload.
+- Warning/critical voltage thresholds and charge/discharge limits.
+- Reset defaults button restores EEPROM settings and restarts in access point mode.
+
+![Settings Page](screenshots/settings-page.png)
+
+### M365 scooter page
+- Battery pack serial number and UART baud selection.
+- Bridge polling interval and retry count for scooter/BMS communication.
+- Per-cell warning and critical voltages for 10s pack emulation.
+- `Map larger packs to a 10-cell equivalent` mode for compatibility with non-standard packs.
+
+![M365 Page](screenshots/m365-page.png)
+
 ## Settings Pages
 
 - `/settings`: Wi-Fi/AP and OTA configuration

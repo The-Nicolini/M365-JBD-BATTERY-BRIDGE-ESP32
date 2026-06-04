@@ -19,6 +19,18 @@ void loadSettings() {
         Serial.println("[EEPROM] default settings initialized");
     } else {
         memcpy(&g_Settings, &loaded, sizeof(g_Settings));
+        if (g_Settings.warning_voltage < 2500 || g_Settings.warning_voltage > 4500) {
+            g_Settings.warning_voltage = 3100;
+        }
+        if (g_Settings.critical_voltage < 2500 || g_Settings.critical_voltage > 4500) {
+            g_Settings.critical_voltage = 2900;
+        }
+        if (g_Settings.warning_charge_current > 10000) {
+            g_Settings.warning_charge_current = 2000;
+        }
+        if (g_Settings.warning_discharge_current > 20000) {
+            g_Settings.warning_discharge_current = 4000;
+        }
         Serial.println("[EEPROM] settings loaded");
     }
 }
@@ -60,5 +72,40 @@ void loadWifiSettings() {
         return;
     }
     memcpy(&wifiSettings, &loaded, sizeof(wifiSettings));
+    if (wifiSettings.ap_timeout_seconds == 0xFFFFu || wifiSettings.ap_timeout_seconds > 86400u) {
+        wifiSettings.ap_timeout_seconds = 300;
+    }
+    if (wifiSettings.station_reconnect_interval == 0 || wifiSettings.station_reconnect_interval > 3600) {
+        wifiSettings.station_reconnect_interval = 60;
+    }
+    if (wifiSettings.max_reconnect_attempts == 0 || wifiSettings.max_reconnect_attempts > 20) {
+        wifiSettings.max_reconnect_attempts = 3;
+    }
+    if (wifiSettings.status_refresh_interval_ms < 200 || wifiSettings.status_refresh_interval_ms > 10000) {
+        wifiSettings.status_refresh_interval_ms = 1500;
+    }
+    if (wifiSettings.scan_timeout_seconds == 0 || wifiSettings.scan_timeout_seconds > 60) {
+        wifiSettings.scan_timeout_seconds = 10;
+    }
+    if (wifiSettings.device_name[0] == '\0') {
+        strncpy(wifiSettings.device_name, "M365toJBD", sizeof(wifiSettings.device_name) - 1);
+        wifiSettings.device_name[sizeof(wifiSettings.device_name) - 1] = '\0';
+    }
+    if (wifiSettings.static_ip[0] == '\0') {
+        strncpy(wifiSettings.static_ip, "192.168.4.2", sizeof(wifiSettings.static_ip) - 1);
+        wifiSettings.static_ip[sizeof(wifiSettings.static_ip) - 1] = '\0';
+    }
+    if (wifiSettings.gateway[0] == '\0') {
+        strncpy(wifiSettings.gateway, "192.168.4.1", sizeof(wifiSettings.gateway) - 1);
+        wifiSettings.gateway[sizeof(wifiSettings.gateway) - 1] = '\0';
+    }
+    if (wifiSettings.subnet[0] == '\0') {
+        strncpy(wifiSettings.subnet, "255.255.255.0", sizeof(wifiSettings.subnet) - 1);
+        wifiSettings.subnet[sizeof(wifiSettings.subnet) - 1] = '\0';
+    }
+    if (wifiSettings.dns[0] == '\0') {
+        strncpy(wifiSettings.dns, "8.8.8.8", sizeof(wifiSettings.dns) - 1);
+        wifiSettings.dns[sizeof(wifiSettings.dns) - 1] = '\0';
+    }
     Serial.println("[EEPROM] wifi settings loaded");
 }

@@ -104,6 +104,12 @@ struct BMSSettings {
     int16_t adcCellsOffset[15] = {0};
     uint32_t m365_baud = M365_UART_BAUD;
     uint8_t map_to_10_cells = 0;
+    uint16_t bms_poll_interval_ms = JBD_QUERY_INTERVAL_MS;
+    uint8_t bms_command_retry_count = 3;
+    uint16_t warning_voltage = 3100;
+    uint16_t critical_voltage = 2900;
+    uint16_t warning_charge_current = 2000;
+    uint16_t warning_discharge_current = 4000;
 } __attribute__((packed));
 
 extern BMSSettings g_Settings;
@@ -148,6 +154,20 @@ struct WifiSettings {
     char station_password[32] = "";
     uint8_t use_existing = 0;
     uint8_t ota_enabled = 0;
+    uint16_t ap_timeout_seconds = 300;
+    char device_name[32] = "M365toJBD";
+    uint8_t verbose_logging = 0;
+    uint8_t use_static_ip = 0;
+    char static_ip[16] = "192.168.4.2";
+    char gateway[16] = "192.168.4.1";
+    char subnet[16] = "255.255.255.0";
+    char dns[16] = "8.8.8.8";
+    uint16_t station_reconnect_interval = 60;
+    uint8_t max_reconnect_attempts = 3;
+    char ota_password[32] = "";
+    uint8_t ota_access_only_on_ap = 0;
+    uint16_t status_refresh_interval_ms = 1500;
+    uint16_t scan_timeout_seconds = 10;
 } __attribute__((packed));
 
 extern WifiSettings wifiSettings;
