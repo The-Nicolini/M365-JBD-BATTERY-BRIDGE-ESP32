@@ -1,90 +1,117 @@
 # ESP32-S3 M365-to-JBD BMS Bridge
 
-This project runs on an ESP32-S3 and bridges M365 scooter controller UART1 traffic with a JBD BMS.
-It provides a web UI for status, Wi-Fi/AP configuration, OTA uploads, and M365 battery settings.
+ESP32-S3 firmware that links an M365 scooter controller to a JBD battery management system.
+The device provides a browser-based dashboard, Wi-Fi configuration, OTA updates, and M365-specific battery settings.
+
+## Table of contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [Web UI Overview](#web-ui-overview)
+  - [Main dashboard](#main-dashboard)
+  - [Settings page](#settings-page)
+  - [M365 scooter page](#m365-scooter-page)
+- [Pages](#pages)
+- [Hardware](#hardware)
+- [Notes](#notes)
+- [Code structure](#code-structure)
+- [License](#license)
 
 ## Features
 
-- Connects to JBD BMS via UART2 and reads battery/cell status
-- Serves a web UI for live status and configuration
-- Supports AP mode with default SSID `M365toJBD` and password `12345678`
-- Supports optional connection to an existing Wi-Fi network
-- OTA update page when enabled in settings
-- M365 scooter settings page for battery serial and UART1 baud rate
-- Optional "map larger packs to 10-cell equivalent" mode for M365 compatibility
-- EEPROM persistence for Wi-Fi and M365 settings
-- Reset defaults button to restore stored settings and return to AP mode
+- Real-time JBD BMS telemetry for pack voltage, current, SOC, cycles, cell voltages, and temperatures.
+- Browser UI with live status, settings, and M365 bridge controls.
+- Built-in access point mode plus optional connection to an existing Wi-Fi network.
+- OTA firmware updates when OTA is enabled in settings.
+- EEPROM-backed persistence and restore defaults support.
+- Compatibility mode for larger packs with 10-cell emulation.
 
-## Hardware
+## Architecture
 
-- Target: `esp32-s3-devkitc-1`
-- JBD UART: `UART2` on pins `RX=47`, `TX=48` at `9600` baud
-- M365 UART: `UART1` on pins `RX=17`, `TX=18`
+The ESP32-S3 bridges two UART channels:
 
-## Build & Upload
+- `UART2` connects to the JBD BMS for pack and cell telemetry.
+- `UART1` connects to the M365 scooter controller for bridge communication.
 
-This is a PlatformIO Arduino project.
+The device serves web pages locally and can operate as a Wi-Fi AP or join an existing network.
+
+![Basic wiring and data flow](screenshots/basic-schema.jpg)
+
+## Quick start
+
+1. Install PlatformIO in VS Code or via the PlatformIO CLI.
+2. From the project root, build the firmware:
 
 ```bash
-cd e:/testting-bms
-platformio run --environment esp32s3
-platformio run --environment esp32s3 --target upload
+platformio run -e esp32s3
 ```
 
-## Usage
+3. Upload to the ESP32-S3:
 
-1. Boot the device.
-2. Connect to Wi-Fi SSID `M365toJBD` with password `12345678`.
-3. Open `http://192.168.4.1/` in your browser.
-4. Configure Wi-Fi, OTA, and M365 settings from the web UI.
+```bash
+platformio run -e esp32s3 -t upload
+```
+
+4. Power the device, connect to AP `M365toJBD` with password `12345678`, then open `http://192.168.4.1/`.
 
 ## Web UI Overview
 
 ### Main dashboard
+
 - Live bridge status and battery metrics.
-- Voltage, current, state-of-charge, and cycle count.
-- Pack summary, fault/protection state, balancing status, cell voltages, and NTC temperatures are updated continuously.
+- Pack voltage, current, state-of-charge, and cycle count.
+- Protection and balancing status, detailed cell voltages, and NTC temperatures.
+- Automatic refresh keeps the display current.
 
 ![Root UI](screenshots/root-ui.png)
 
 ### Settings page
-- Device name / hostname.
-- AP SSID/password and optional station network selection.
-- OTA enable toggle for remote firmware upload.
-- Warning/critical voltage thresholds and charge/discharge limits.
-- Reset defaults button restores EEPROM settings and restarts in access point mode.
+
+- Configure device name and hostname.
+- Set AP credentials or connect to an existing Wi-Fi network.
+- Enable OTA updates and adjust warning thresholds.
+- Reset stored settings and restart into AP mode.
 
 ![Settings Page](screenshots/settings-page.png)
 
 ### M365 scooter page
-- Battery pack serial number and UART baud selection.
-- Bridge polling interval and retry count for scooter/BMS communication.
-- Per-cell warning and critical voltages for 10s pack emulation.
-- `Map larger packs to a 10-cell equivalent` mode for compatibility with non-standard packs.
+
+- Enter the battery pack serial and choose the scooter UART baud rate.
+- Tune polling interval and retry count for scooter/BMS communication.
+- Configure per-cell warning and critical voltage thresholds.
+- Enable 10-cell mapping for larger battery packs.
 
 ![M365 Page](screenshots/m365-page.png)
 
-## Settings Pages
+## Pages
 
-- `/settings`: Wi-Fi/AP and OTA configuration
-- `/m365-scooter`: M365 UART1 baud and battery serial configuration
-- `/ota`: OTA firmware upload (enabled only when OTA is turned on)
+- `/` — main dashboard
+- `/settings` — Wi-Fi, AP, OTA, and BMS warning configuration
+- `/m365-scooter` — M365 bridge and pack settings
+- `/ota` — OTA firmware upload (visible when OTA is enabled)
+
+## Hardware
+
+- Target: `esp32-s3-devkitc-1`
+- JBD UART: `UART2` (`RX=47`, `TX=48`, `9600` baud)
+- M365 UART: `UART1` (`RX=17`, `TX=18`)
 
 ## Notes
 
-- Default standard M365 UART baud rate is `115200`.
-- The scooter page allows mapping a larger battery pack to a 10-cell equivalent so the M365 controller sees a normal pack.
-- If the device fails to connect, use the reset button on `/settings` to restore defaults.
+- The default M365 bridge baud rate is `115200`.
+- Reset defaults if the device fails to connect after configuration changes.
+- The M365 page uses per-cell thresholds for standard 10s pack operation.
 
-## Source Organization
+## Code structure
 
-- `src/main.cpp` — application entry, setup, and loop
-- `src/globals.h` — shared structures and global state
-- `src/bms.h` / `src/bms.cpp` — JBD decoding and M365 data mapping
-- `src/wifi_network.h` / `src/wifi_network.cpp` — Wi-Fi/AP and OTA setup
-- `src/persistence.h` / `src/persistence.cpp` — EEPROM load/save/reset logic
-- `src/webui.h` / `src/webui.cpp` — HTML page rendering and web routes
+- `src/main.cpp` — application startup and main loop
+- `src/globals.h` — shared settings and state definitions
+- `src/bms.cpp` / `src/bms.h` — JBD BMS decoding and data mapping
+- `src/wifi_network.cpp` / `src/wifi_network.h` — Wi-Fi, AP, and OTA management
+- `src/persistence.cpp` / `src/persistence.h` — EEPROM persistence and reset logic
+- `src/webui.cpp` / `src/webui.h` — HTML generation and HTTP routes
 
 ## License
 
-This project is licensed under the MIT License. See the `LICENSE` file for full terms.
+Licensed under the MIT License. See `LICENSE` for details.
