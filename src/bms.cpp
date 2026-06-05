@@ -553,7 +553,7 @@ String buildStatusJson() {
         json += String(bms.cell_voltages[i], 3);
         if (i + 1 < bms.cell_voltage_count) json += ",";
     }
-    json += "],\"ntc_temps\":[";
+    json += ",\"ntc_temps\":[";
     for (int i = 0; i < bms.ntc_count_received; ++i) {
         float tempValue = bms.ntc_temps[i];
         if (overtemp_test) {
